@@ -1,0 +1,127 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_positioner::{Position, WindowExt};
+
+/// Ignores the blur that the opening click itself causes, and treats a tray
+/// click that arrives in the same moment as that blur as "close", not "open".
+struct PopupGuard {
+    hidden_at: Mutex<Option<Instant>>,
+    suppress_blur: AtomicBool,
+}
+
+const BLUR_GRACE: Duration = Duration::from_millis(150);
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_positioner::init())
+        .manage(PopupGuard {
+            hidden_at: Mutex::new(None),
+            suppress_blur: AtomicBool::new(false),
+        })
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+
+            let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&refresh, &quit])?;
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .expect("bundle icon missing; tray cannot start");
+
+            TrayIconBuilder::with_id("radar")
+                .tooltip("Radar")
+                .icon(icon)
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "refresh" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("refresh", ());
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        toggle_popup(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                WindowEvent::Focused(false) => {
+                    let guard = window.state::<PopupGuard>();
+                    if guard.suppress_blur.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if let Ok(mut hidden_at) = guard.hidden_at.lock() {
+                        *hidden_at = Some(Instant::now());
+                    }
+                    let _ = window.hide();
+                }
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                _ => {}
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running Radar");
+}
+
+fn toggle_popup(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.hide();
+        return;
+    }
+
+    let guard = app.state::<PopupGuard>();
+    let just_hidden = guard
+        .hidden_at
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .is_some_and(|at| at.elapsed() < BLUR_GRACE);
+    if just_hidden {
+        return;
+    }
+
+    guard.suppress_blur.store(true, Ordering::SeqCst);
+    let _ = window.move_window_constrained(Position::TrayCenter);
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(BLUR_GRACE);
+        app.state::<PopupGuard>()
+            .suppress_blur
+            .store(false, Ordering::SeqCst);
+    });
+}
