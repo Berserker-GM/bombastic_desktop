@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Capability for the tray popup",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "store:default",
+    "notification:default"
+  ]
 }

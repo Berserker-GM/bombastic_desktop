@@ -21,6 +21,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(PopupGuard {
             hidden_at: Mutex::new(None),
             suppress_blur: AtomicBool::new(false),

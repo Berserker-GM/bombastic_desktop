@@ -29,7 +29,7 @@ export interface ParsedFeed {
   healthDropped: number;
 }
 
-export type SectionId = "updates" | "soon" | "new" | "contests" | "saved";
+export type SectionId = "updates" | "soon" | "new" | "contests" | "hackathons" | "saved";
 export type CountKey = "important_updates" | "deadlines_soon" | "new" | "saved";
 
 export const SECTIONS: readonly {
@@ -42,6 +42,7 @@ export const SECTIONS: readonly {
   { id: "soon", label: "Soon", field: "deadlines_soon", empty: "No deadlines soon." },
   { id: "new", label: "New", field: "new_opportunities", empty: "Nothing new." },
   { id: "contests", label: "Today's contests", field: "todays_contests", empty: "No contests today." },
+  { id: "hackathons", label: "Hackathons", field: "hackathons", empty: "No hackathons." },
   { id: "saved", label: "Saved", field: "saved", empty: "Nothing saved." },
 ];
 
