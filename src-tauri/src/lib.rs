@@ -90,8 +90,42 @@ pub fn run() {
                 _ => {}
             }
         })
+        .invoke_handler(tauri::generate_handler![get_feed])
         .run(tauri::generate_context!())
         .expect("error while running Radar");
+}
+
+#[derive(serde::Serialize)]
+struct FeedHttp {
+    status: u16,
+    body: String,
+}
+
+#[tauri::command]
+async fn get_feed(api_url: String, token: String) -> Result<FeedHttp, String> {
+    let base = api_url.trim().trim_end_matches('/');
+    let secret = token.trim();
+    if base.is_empty() || secret.is_empty() {
+        return Err("bad-url".into());
+    }
+    let url = reqwest::Url::parse(&format!("{base}/feed")).map_err(|_| "bad-url".to_string())?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err("bad-url".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "unreachable".to_string())?;
+    let response = client
+        .get(url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {secret}"))
+        .send()
+        .await
+        .map_err(|_| "unreachable".to_string())?;
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(|_| "unreachable".to_string())?;
+    Ok(FeedHttp { status, body })
 }
 
 fn toggle_popup(app: &tauri::AppHandle) {

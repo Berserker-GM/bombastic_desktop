@@ -7,6 +7,7 @@
     "core:default",
     "opener:default",
     "store:default",
-    "notification:default"
+    "notification:default",
+    "allow-get-feed"
   ]
 }
