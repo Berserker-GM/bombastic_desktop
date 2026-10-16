@@ -1,3 +1,5 @@
+import { savedIds } from "./actions.ts";
+import type { EventDetail, RowAction } from "./api.ts";
 import {
   COUNTS,
   SECTIONS,
@@ -31,6 +33,23 @@ const TAB_LABEL: Record<SectionId, string> = {
 };
 
 type Report = (message: string | null, pending: boolean) => void;
+
+export interface FeedChrome {
+  added: ReadonlySet<number>;
+  busy: ReadonlySet<number>;
+  errors: ReadonlyMap<number, string>;
+  openWhy: ReadonlySet<number>;
+  details: ReadonlyMap<number, EventDetail>;
+  whyLoading: ReadonlySet<number>;
+  whyErrors: ReadonlyMap<number, string>;
+}
+
+export interface FeedHandlers {
+  onTab: (tab: SectionId) => void;
+  onAction: (item: FeedItem, action: RowAction) => void;
+  onOpen: (item: FeedItem) => void;
+  onWhy: (item: FeedItem) => void;
+}
 
 export function renderSetup(
   root: HTMLElement,
@@ -113,11 +132,15 @@ export function renderFeed(
   feed: ParsedFeed,
   tab: SectionId,
   now: Date,
-  onTab: (tab: SectionId) => void,
+  chrome: FeedChrome,
+  handlers: FeedHandlers,
 ): void {
   const shell = document.createElement("div");
   shell.className = "shell";
-  shell.append(renderCounts(feed, tab, onTab), el("p", "scan", formatScanLine(feed.lastScanAt, feed.nextScanAt, now)));
+  shell.append(
+    renderCounts(feed, tab, handlers.onTab),
+    el("p", "scan", formatScanLine(feed.lastScanAt, feed.nextScanAt, now)),
+  );
 
   if (feed.sourceHealth.length > 0) {
     const banner = document.createElement("div");
@@ -129,7 +152,7 @@ export function renderFeed(
     shell.append(banner);
   }
 
-  shell.append(renderTabs(tab, onTab), renderList(feed, tab, now));
+  shell.append(renderTabs(tab, handlers.onTab), renderList(feed, tab, now, chrome, handlers));
   root.replaceChildren(shell);
 }
 
@@ -168,7 +191,13 @@ function renderTabs(tab: SectionId, onTab: (tab: SectionId) => void): HTMLElemen
   return row;
 }
 
-function renderList(feed: ParsedFeed, tab: SectionId, now: Date): HTMLElement {
+function renderList(
+  feed: ParsedFeed,
+  tab: SectionId,
+  now: Date,
+  chrome: FeedChrome,
+  handlers: FeedHandlers,
+): HTMLElement {
   const section = SECTIONS.find((item) => item.id === tab) ?? SECTIONS[0];
   const list = document.createElement("div");
   list.className = "list";
@@ -177,11 +206,18 @@ function renderList(feed: ParsedFeed, tab: SectionId, now: Date): HTMLElement {
     list.append(el("p", "empty", section.empty));
     return list;
   }
-  for (const item of items) list.append(renderRow(item, now));
+  const saved = savedIds(feed);
+  for (const item of items) list.append(renderRow(item, now, saved.has(item.event_id), chrome, handlers));
   return list;
 }
 
-function renderRow(item: FeedItem, now: Date): HTMLElement {
+function renderRow(
+  item: FeedItem,
+  now: Date,
+  saved: boolean,
+  chrome: FeedChrome,
+  handlers: FeedHandlers,
+): HTMLElement {
   const row = document.createElement("article");
   row.className = "row";
   row.append(el("h2", "title", item.title));
@@ -203,7 +239,88 @@ function renderRow(item: FeedItem, now: Date): HTMLElement {
     for (const reason of item.reasons) chips.append(el("span", "chip", chipLabel(reason)));
     row.append(chips);
   }
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const locked = chrome.busy.has(item.event_id);
+  const added = chrome.added.has(item.event_id);
+  actions.append(
+    actionButton(added ? "Added" : "Add to Calendar", locked || added, () => handlers.onAction(item, "add_to_calendar")),
+    actionButton("Ignore", locked, () => handlers.onAction(item, "ignore")),
+    actionButton(saved ? "Unsave" : "Save", locked, () => handlers.onAction(item, saved ? "unsave" : "save")),
+  );
+  const source = httpUrl(item.url);
+  if (source) actions.append(actionButton("View Source", false, () => handlers.onOpen(item)));
+  const why = actionButton("Why?", false, () => handlers.onWhy(item));
+  why.classList.add("why");
+  why.setAttribute("aria-expanded", chrome.openWhy.has(item.event_id) ? "true" : "false");
+  actions.append(why);
+  row.append(actions);
+
+  const error = chrome.errors.get(item.event_id);
+  if (error) {
+    const note = el("p", "row-error", error);
+    note.setAttribute("role", "alert");
+    row.append(note);
+  }
+
+  if (chrome.openWhy.has(item.event_id)) row.append(renderWhy(item.event_id, chrome));
   return row;
+}
+
+function renderWhy(eventId: number, chrome: FeedChrome): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "why-panel";
+  const whyError = chrome.whyErrors.get(eventId);
+  if (chrome.whyLoading.has(eventId)) {
+    panel.append(el("p", undefined, "Loading…"));
+    return panel;
+  }
+  if (whyError) {
+    const note = el("p", "row-error", whyError);
+    note.setAttribute("role", "alert");
+    panel.append(note);
+    return panel;
+  }
+  const detail = chrome.details.get(eventId);
+  if (!detail || (detail.reasons.length === 0 && detail.evidence.length === 0)) {
+    panel.append(el("p", undefined, "Nothing more to show."));
+    return panel;
+  }
+  if (detail.reasons.length > 0) panel.append(detailBlock("Reasons", detail.reasons));
+  if (detail.evidence.length > 0) panel.append(detailBlock("Evidence", detail.evidence));
+  return panel;
+}
+
+function detailBlock(title: string, lines: string[]): HTMLElement {
+  const block = document.createElement("div");
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const list = document.createElement("ul");
+  for (const line of lines) list.append(el("li", undefined, line));
+  block.append(heading, list);
+  return block;
+}
+
+function actionButton(label: string, disabled: boolean, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "action";
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function httpUrl(value: string | null): string | null {
+  if (value === null) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 function labeled(text: string, input: HTMLInputElement): HTMLLabelElement {
@@ -217,8 +334,13 @@ function el(tag: "h1", className: string | undefined, text: string): HTMLHeading
 function el(tag: "h2", className: string | undefined, text: string): HTMLHeadingElement;
 function el(tag: "p", className: string | undefined, text: string): HTMLParagraphElement;
 function el(tag: "span", className: string | undefined, text: string): HTMLSpanElement;
+function el(tag: "li", className: string | undefined, text: string): HTMLLIElement;
 function el(tag: "strong", className: string | undefined, text: string): HTMLElement;
-function el(tag: "h1" | "h2" | "p" | "span" | "strong", className: string | undefined, text: string): HTMLElement {
+function el(
+  tag: "h1" | "h2" | "p" | "span" | "li" | "strong",
+  className: string | undefined,
+  text: string,
+): HTMLElement {
   const node = document.createElement(tag);
   if (className) node.className = className;
   node.textContent = text;

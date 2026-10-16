@@ -8,6 +8,8 @@
     "opener:default",
     "store:default",
     "notification:default",
-    "allow-get-feed"
+    "allow-get-feed",
+    "allow-get-event",
+    "allow-post-action"
   ]
 }

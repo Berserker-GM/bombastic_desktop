@@ -90,7 +90,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![get_feed])
+        .invoke_handler(tauri::generate_handler![get_feed, get_event, post_action])
         .run(tauri::generate_context!())
         .expect("error while running Radar");
 }
@@ -103,12 +103,57 @@ struct FeedHttp {
 
 #[tauri::command]
 async fn get_feed(api_url: String, token: String) -> Result<FeedHttp, String> {
-    let base = api_url.trim().trim_end_matches('/');
-    let secret = token.trim();
-    if base.is_empty() || secret.is_empty() {
+    radar_send(&api_url, &token, reqwest::Method::GET, "/feed", None).await
+}
+
+#[tauri::command]
+async fn get_event(api_url: String, token: String, event_id: i64) -> Result<FeedHttp, String> {
+    if event_id < 0 {
         return Err("bad-url".into());
     }
-    let url = reqwest::Url::parse(&format!("{base}/feed")).map_err(|_| "bad-url".to_string())?;
+    radar_send(
+        &api_url,
+        &token,
+        reqwest::Method::GET,
+        &format!("/events/{event_id}"),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn post_action(
+    api_url: String,
+    token: String,
+    event_id: i64,
+    action: String,
+) -> Result<FeedHttp, String> {
+    if event_id < 0 || !matches!(action.as_str(), "add_to_calendar" | "ignore" | "save" | "unsave") {
+        return Err("bad-url".into());
+    }
+    radar_send(
+        &api_url,
+        &token,
+        reqwest::Method::POST,
+        &format!("/events/{event_id}/action"),
+        Some(serde_json::json!({ "action": action })),
+    )
+    .await
+}
+
+async fn radar_send(
+    api_url: &str,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    json: Option<serde_json::Value>,
+) -> Result<FeedHttp, String> {
+    let base = api_url.trim().trim_end_matches('/');
+    let secret = token.trim();
+    if base.is_empty() || secret.is_empty() || !path.starts_with('/') || path.contains("..") {
+        return Err("bad-url".into());
+    }
+    let url = reqwest::Url::parse(&format!("{base}{path}")).map_err(|_| "bad-url".to_string())?;
     if url.scheme() != "http" && url.scheme() != "https" {
         return Err("bad-url".into());
     }
@@ -117,12 +162,13 @@ async fn get_feed(api_url: String, token: String) -> Result<FeedHttp, String> {
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|_| "unreachable".to_string())?;
-    let response = client
-        .get(url)
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {secret}"))
-        .send()
-        .await
-        .map_err(|_| "unreachable".to_string())?;
+    let mut request = client
+        .request(method, url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {secret}"));
+    if let Some(json) = json {
+        request = request.json(&json);
+    }
+    let response = request.send().await.map_err(|_| "unreachable".to_string())?;
     let status = response.status().as_u16();
     let body = response.text().await.map_err(|_| "unreachable".to_string())?;
     Ok(FeedHttp { status, body })

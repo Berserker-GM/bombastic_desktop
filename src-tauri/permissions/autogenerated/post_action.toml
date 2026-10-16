@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-post-action"
+description = "Enables the post_action command without any pre-configured scope."
+commands.allow = ["post_action"]
+
+[[permission]]
+identifier = "deny-post-action"
+description = "Denies the post_action command without any pre-configured scope."
+commands.deny = ["post_action"]
