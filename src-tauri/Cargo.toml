@@ -2,7 +2,7 @@
 name = "desktop"
 version = "0.1.0"
 description = "Radar tray"
-authors = ["you"]
+authors = ["Berserker-GM"]
 edition = "2024"
 
 [lib]
