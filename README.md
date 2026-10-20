@@ -7,10 +7,26 @@ picked, and start a scan with **Scan now**.
 
 The app fetches the feed on startup and again every 30 minutes, and refetches when you open the popup
 if the data is more than 5 minutes old. It pauses while the machine is offline. When an item becomes an
-important unseen update, it shows a desktop notification. Right-click the tray icon for **Refresh** and
-**Quit**.
+important unseen update, it shows a desktop notification. Right-click the tray icon for **Refresh**,
+**Start with Windows** and **Quit**.
 
 Built with Tauri 2 and TypeScript (Vite).
+
+## Install and first run
+
+1. Run `Radar_0.1.0_x64_en-US.msi` (or `Radar_0.1.0_x64-setup.exe`). No window opens after install
+   or launch, because Radar lives only in the tray.
+2. Find the Radar icon in the tray by the clock. If it isn't there, click the **^** arrow to open the
+   overflow area. You can drag it out of there to keep it visible.
+3. Left-click the icon. Enter the **API URL**, which is your Render address, like
+   `https://<your-service>.onrender.com` (no trailing path), and the **Token**, which is the API's
+   `API_TOKEN`. Then click **Test**. The settings are saved only if the API accepts them.
+4. Right-click the icon and tick **Start with Windows** so Radar starts in the tray when you sign in.
+   It's off by default. Click it again to turn it off.
+
+Settings are saved in `%APPDATA%\com.radar.desktop\settings.json`, along with the list of important
+items already notified. To reset, quit Radar from the tray menu, delete that file, and start Radar
+again: it shows the setup form. Running Radar a second time while it's already running does nothing.
 
 ## Requirements
 
