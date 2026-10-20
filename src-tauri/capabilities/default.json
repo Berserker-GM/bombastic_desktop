@@ -10,6 +10,8 @@
     "notification:default",
     "allow-get-feed",
     "allow-get-event",
-    "allow-post-action"
+    "allow-post-action",
+    "allow-scan-now",
+    "allow-scan-status"
   ]
 }

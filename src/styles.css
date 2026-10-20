@@ -313,3 +313,64 @@ button:disabled {
   margin: 0;
   padding-left: 16px;
 }
+
+.footer {
+  border-top: 1px solid #232733;
+  padding: 6px 12px 8px;
+}
+
+.footer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-status {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: #8b93a3;
+  font-size: 11px;
+}
+
+.scan-now {
+  flex: 0 0 auto;
+}
+
+.spinner {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #2c3240;
+  border-top-color: #5ee0a0;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.scan-sources {
+  max-height: 72px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: #b7bec9;
+  font-size: 11px;
+}
+
+.scan-sources .failed {
+  color: #f0a0a0;
+}

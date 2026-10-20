@@ -90,7 +90,13 @@ pub fn run() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![get_feed, get_event, post_action])
+        .invoke_handler(tauri::generate_handler![
+            get_feed,
+            get_event,
+            post_action,
+            scan_now,
+            scan_status
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Radar");
 }
@@ -139,6 +145,16 @@ async fn post_action(
         Some(serde_json::json!({ "action": action })),
     )
     .await
+}
+
+#[tauri::command]
+async fn scan_now(api_url: String, token: String) -> Result<FeedHttp, String> {
+    radar_send(&api_url, &token, reqwest::Method::POST, "/scan/now", None).await
+}
+
+#[tauri::command]
+async fn scan_status(api_url: String, token: String) -> Result<FeedHttp, String> {
+    radar_send(&api_url, &token, reqwest::Method::GET, "/scan/status", None).await
 }
 
 async fn radar_send(

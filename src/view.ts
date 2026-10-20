@@ -1,5 +1,5 @@
 import { savedIds } from "./actions.ts";
-import type { EventDetail, RowAction } from "./api.ts";
+import type { EventDetail, RowAction, ScanSource } from "./api.ts";
 import {
   COUNTS,
   SECTIONS,
@@ -44,7 +44,15 @@ export interface FeedChrome {
   whyErrors: ReadonlyMap<number, string>;
 }
 
+export interface FooterState {
+  scanning: boolean;
+  message: string | null;
+  sources: readonly ScanSource[];
+  note: string | null;
+}
+
 export interface FeedHandlers {
+  onScan: () => void;
   onTab: (tab: SectionId) => void;
   onAction: (item: FeedItem, action: RowAction) => void;
   onOpen: (item: FeedItem) => void;
@@ -133,6 +141,7 @@ export function renderFeed(
   tab: SectionId,
   now: Date,
   chrome: FeedChrome,
+  footer: FooterState,
   handlers: FeedHandlers,
 ): void {
   const shell = document.createElement("div");
@@ -152,8 +161,48 @@ export function renderFeed(
     shell.append(banner);
   }
 
-  shell.append(renderTabs(tab, handlers.onTab), renderList(feed, tab, now, chrome, handlers));
+  shell.append(
+    renderTabs(tab, handlers.onTab),
+    renderList(feed, tab, now, chrome, handlers),
+    renderFooter(footer, handlers.onScan),
+  );
   root.replaceChildren(shell);
+}
+
+function renderFooter(state: FooterState, onScan: () => void): HTMLElement {
+  const footer = document.createElement("footer");
+  footer.className = "footer";
+
+  const bar = document.createElement("div");
+  bar.className = "footer-bar";
+  const status = document.createElement("p");
+  status.className = "footer-status";
+  status.setAttribute("role", "status");
+  if (state.scanning) {
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    status.append(spinner);
+  }
+  const text = [state.message, state.note].filter((part): part is string => part !== null && part !== "");
+  status.append(text.join(" · "));
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "action scan-now";
+  button.textContent = "Scan now";
+  button.disabled = state.scanning;
+  button.addEventListener("click", onScan);
+  bar.append(status, button);
+  footer.append(bar);
+
+  if (state.sources.length > 0) {
+    const list = document.createElement("ul");
+    list.className = "scan-sources";
+    for (const source of state.sources) list.append(el("li", source.failed ? "failed" : undefined, source.line));
+    footer.append(list);
+  }
+  return footer;
 }
 
 function renderCounts(feed: ParsedFeed, tab: SectionId, onTab: (tab: SectionId) => void): HTMLElement {

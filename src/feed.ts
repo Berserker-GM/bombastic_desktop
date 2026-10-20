@@ -10,6 +10,7 @@ export interface FeedItem {
   reasons: string[];
   diff: string | null;
   key_at: string | null;
+  important_unseen: boolean;
 }
 
 export interface SourceHealth {
@@ -242,6 +243,7 @@ function normalizeItem(value: unknown): FeedItem | null {
       : [],
     diff: asString(row.diff),
     key_at: asString(row.key_at),
+    important_unseen: row.important_unseen === true,
   };
 }
 

@@ -114,7 +114,81 @@ export function parseEventDetail(value: unknown): EventDetail | null {
   return { reasons, evidence };
 }
 
-async function callRadar(command: "post_action" | "get_event", args: Record<string, unknown>): Promise<FeedHttp> {
+export type ScanStart = "started" | "running" | "recent";
+
+export interface ScanSource {
+  name: string;
+  line: string;
+  failed: boolean;
+}
+
+export interface ScanRun {
+  id: number | null;
+  status: string;
+  sources: ScanSource[];
+}
+
+const FAILED_RESULTS = new Set(["unreachable", "malformed"]);
+
+const RESULT_LABELS: Record<string, string> = {
+  ok_new: "ok",
+  ok_nothing_new: "nothing new",
+  unreachable: "unreachable",
+  malformed: "unreadable response",
+};
+
+export async function startScan(apiUrl: string, token: string): Promise<ScanStart> {
+  const result = await callRadar("scan_now", { apiUrl, token });
+  if (result.status === 409) return "running";
+  if (result.status === 429) return "recent";
+  if (result.status < 200 || result.status >= 300) throw new ActionError(result.status);
+  return "started";
+}
+
+/** Resolves to null when the server has no scan on record. */
+export async function fetchScanStatus(apiUrl: string, token: string): Promise<ScanRun | null> {
+  const result = await callRadar("scan_status", { apiUrl, token });
+  if (result.status === 404) return null;
+  if (result.status !== 200) throw new ActionError(result.status);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.body);
+  } catch {
+    throw new ActionError(null);
+  }
+  const run = parseScanRun(parsed);
+  if (run === null) throw new ActionError(null);
+  return run;
+}
+
+export function parseScanRun(value: unknown): ScanRun | null {
+  const body = asRecord(value);
+  if (!body || typeof body.status !== "string") return null;
+  const perSource = asRecord(body.per_source) ?? {};
+  const sources: ScanSource[] = [];
+  for (const [name, entry] of Object.entries(perSource)) {
+    const row = asRecord(entry);
+    const result = row && typeof row.result === "string" ? row.result : "";
+    if (result === "skipped") continue;
+    const failed = FAILED_RESULTS.has(result);
+    const error = row ? firstString(row, ["error"]) : null;
+    const counts = row ? asRecord(row.counts) : null;
+    let detail = RESULT_LABELS[result] ?? (result || "unknown");
+    if (result === "ok_new" && counts) {
+      const added = typeof counts.new === "number" ? counts.new : 0;
+      const changed = typeof counts.changed === "number" ? counts.changed : 0;
+      detail = `${added} new, ${changed} changed`;
+    }
+    if (failed && error) detail = `${detail} (${error})`;
+    sources.push({ name, line: `${name}: ${detail}`, failed });
+  }
+  return { id: typeof body.id === "number" ? body.id : null, status: body.status, sources };
+}
+
+async function callRadar(
+  command: "post_action" | "get_event" | "scan_now" | "scan_status",
+  args: Record<string, unknown>,
+): Promise<FeedHttp> {
   const apiUrl = typeof args.apiUrl === "string" ? normalizeApiUrl(args.apiUrl) : null;
   const token = typeof args.token === "string" ? args.token.trim() : "";
   if (apiUrl === null || token === "") throw new ActionError(null);

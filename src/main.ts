@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ignoreEvent, saveEvent, unsaveEvent } from "./actions.ts";
 import {
@@ -7,15 +8,38 @@ import {
   actionMessage,
   fetchEvent,
   fetchFeed,
+  fetchScanStatus,
   normalizeApiUrl,
   postAction,
+  startScan,
   type EventDetail,
   type FeedProblem,
   type RowAction,
+  type ScanRun,
+  type ScanStart,
 } from "./api.ts";
 import type { FeedItem, ParsedFeed, SectionId } from "./feed.ts";
+import { checkImportant } from "./notify.ts";
 import { readSettings, writeSettings, type Settings } from "./settings.ts";
-import { renderFeed, renderLoading, renderProblem, renderSetup, type FeedChrome } from "./view.ts";
+import {
+  renderFeed,
+  renderLoading,
+  renderProblem,
+  renderSetup,
+  type FeedChrome,
+  type FooterState,
+} from "./view.ts";
+
+/** Background feed fetch cadence; the only timer that runs while idle. */
+const POLL_MS = 30 * 60_000;
+/** Opening the popup refetches when the data is older than this. */
+const STALE_MS = 5 * 60_000;
+const SCAN_POLL_MS = 3_000;
+const SCAN_LIMIT_MS = 30 * 60_000;
+const SCAN_MISSES = 5;
+
+type ScanState = Omit<FooterState, "note">;
+const IDLE_SCAN: ScanState = { scanning: false, message: null, sources: [] };
 
 const root = document.querySelector("#app");
 if (!(root instanceof HTMLElement)) {
@@ -37,6 +61,19 @@ const details = new Map<number, EventDetail>();
 const whyLoading = new Set<number>();
 const whyErrors = new Map<number, string>();
 
+let popupOpen = false;
+let pollTimer: number | undefined;
+let lastAttemptAt = 0;
+let lastSuccessAt = 0;
+let lastFailed = false;
+let refreshing = false;
+let refreshAgain = false;
+let refreshNote: string | null = null;
+
+let scan: ScanState = IDLE_SCAN;
+let scanTimer: number | undefined;
+let scanToken = 0;
+
 function messageFor(problem: FeedProblem): string {
   switch (problem) {
     case "unauthorized":
@@ -52,6 +89,7 @@ function messageFor(problem: FeedProblem): string {
 
 function showSetup(message: string | null): void {
   screen = "setup";
+  cancelScan();
   renderSetup(
     app,
     {
@@ -83,6 +121,7 @@ function showSetup(message: string | null): void {
           saved = { apiUrl: base, token: secret };
           resetRowState();
           showFeed(feed);
+          recordFetch(feed, base);
         } catch (error) {
           if (id !== generation) return;
           const problem = error instanceof FeedError ? error.problem : "unreachable";
@@ -102,7 +141,10 @@ function showFeed(next: ParsedFeed): void {
   screen = "feed";
   const list = app.querySelector(".list");
   const scroll = list instanceof HTMLElement ? list.scrollTop : 0;
-  renderFeed(app, next, tab, new Date(), chrome(), {
+  renderFeed(app, next, tab, new Date(), chrome(), footer(), {
+    onScan: () => {
+      void runScan();
+    },
     onTab: (section) => {
       if (section === tab || feed === null) return;
       tab = section;
@@ -120,6 +162,14 @@ function showFeed(next: ParsedFeed): void {
   });
   const nextList = app.querySelector(".list");
   if (nextList instanceof HTMLElement) nextList.scrollTop = scroll;
+}
+
+function footer(): FooterState {
+  return { ...scan, note: navigator.onLine ? refreshNote : "Offline" };
+}
+
+function rerender(): void {
+  if (screen === "feed" && feed !== null) showFeed(feed);
 }
 
 function resetRowState(): void {
@@ -228,8 +278,10 @@ async function loadSavedFeed(): Promise<void> {
     const feed = await fetchFeed(current.apiUrl, current.token);
     if (id !== generation) return;
     showFeed(feed);
+    recordFetch(feed, current.apiUrl);
   } catch (error) {
     if (id !== generation) return;
+    recordFetch(null, current.apiUrl);
     const problem = error instanceof FeedError ? error.problem : "unreachable";
     if (problem === "unauthorized" || problem === "bad-url") {
       showSetup(messageFor(problem));
@@ -242,6 +294,177 @@ async function loadSavedFeed(): Promise<void> {
   }
 }
 
+/** Refetches without blanking the feed. Overlapping calls collapse into one rerun. */
+async function quietRefresh(): Promise<void> {
+  if (saved === null) return;
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
+  refreshing = true;
+  const epoch = generation;
+  const current = saved;
+  try {
+    const next = await fetchFeed(current.apiUrl, current.token);
+    if (epoch !== generation) return;
+    recordFetch(next, current.apiUrl);
+    if (screen === "feed") showFeed(next);
+  } catch (error) {
+    if (epoch !== generation) return;
+    recordFetch(null, current.apiUrl);
+    const problem = error instanceof FeedError ? error.problem : "unreachable";
+    if (problem === "unauthorized" || problem === "bad-url") {
+      showSetup(messageFor(problem));
+      return;
+    }
+    refreshNote = "Couldn't refresh";
+    rerender();
+  } finally {
+    refreshing = false;
+    if (refreshAgain) {
+      refreshAgain = false;
+      refresh();
+    }
+  }
+}
+
+function refresh(): void {
+  if (saved === null) return;
+  if (screen === "feed") void quietRefresh();
+  else if (screen === "problem") void loadSavedFeed();
+}
+
+function recordFetch(next: ParsedFeed | null, apiUrl: string): void {
+  lastAttemptAt = Date.now();
+  lastFailed = next === null;
+  if (next !== null) {
+    lastSuccessAt = lastAttemptAt;
+    refreshNote = null;
+    void checkImportant(next, apiUrl, popupOpen);
+  }
+  schedulePoll();
+}
+
+/** Keeps at most one pending fetch, due POLL_MS after the last attempt. Idle while open or offline. */
+function schedulePoll(): void {
+  window.clearTimeout(pollTimer);
+  pollTimer = undefined;
+  if (saved === null || popupOpen || !navigator.onLine) return;
+  const wait = Math.max(0, lastAttemptAt + POLL_MS - Date.now());
+  pollTimer = window.setTimeout(() => {
+    pollTimer = undefined;
+    refresh();
+  }, wait);
+}
+
+function onPopupFocus(focused: boolean): void {
+  popupOpen = focused;
+  schedulePoll();
+  if (focused && navigator.onLine && Date.now() - lastSuccessAt > STALE_MS) refresh();
+}
+
+function onOnline(): void {
+  rerender();
+  if (lastFailed || Date.now() - lastAttemptAt >= POLL_MS) refresh();
+  else schedulePoll();
+}
+
+function onOffline(): void {
+  schedulePoll();
+  rerender();
+}
+
+function setScan(next: ScanState): void {
+  scan = next;
+  rerender();
+}
+
+function cancelScan(): void {
+  scanToken += 1;
+  window.clearTimeout(scanTimer);
+  scanTimer = undefined;
+  scan = IDLE_SCAN;
+}
+
+async function runScan(): Promise<void> {
+  if (saved === null || scan.scanning) return;
+  const token = ++scanToken;
+  const current = saved;
+  setScan({ scanning: true, message: "Starting scan…", sources: [] });
+  let start: ScanStart;
+  try {
+    start = await startScan(current.apiUrl, current.token);
+  } catch (error) {
+    if (token !== scanToken) return;
+    if (error instanceof ActionError && error.status === 401) {
+      showSetup(messageFor("unauthorized"));
+      return;
+    }
+    setScan({ scanning: false, message: navigator.onLine ? "Couldn't start a scan" : "Offline", sources: [] });
+    return;
+  }
+  if (token !== scanToken) return;
+  if (start === "recent") {
+    setScan({ scanning: false, message: "Scanned a few minutes ago", sources: [] });
+    return;
+  }
+  setScan({ scanning: true, message: start === "running" ? "A scan is already running" : "Scanning…", sources: [] });
+  pollScan(token, current, Date.now(), 0);
+}
+
+function pollScan(token: number, current: Settings, startedAt: number, misses: number): void {
+  scanTimer = window.setTimeout(() => {
+    scanTimer = undefined;
+    void checkScan(token, current, startedAt, misses);
+  }, SCAN_POLL_MS);
+}
+
+async function checkScan(token: number, current: Settings, startedAt: number, misses: number): Promise<void> {
+  if (token !== scanToken) return;
+  if (!navigator.onLine) {
+    pollScan(token, current, startedAt, misses);
+    return;
+  }
+  let run: ScanRun | null;
+  try {
+    run = await fetchScanStatus(current.apiUrl, current.token);
+  } catch (error) {
+    if (token !== scanToken) return;
+    if (error instanceof ActionError && error.status === 401) {
+      showSetup(messageFor("unauthorized"));
+      return;
+    }
+    if (misses + 1 >= SCAN_MISSES) {
+      setScan({ scanning: false, message: "Lost track of the scan", sources: [] });
+      refresh();
+      return;
+    }
+    pollScan(token, current, startedAt, misses + 1);
+    return;
+  }
+  if (token !== scanToken) return;
+  if (run !== null && run.status === "running") {
+    if (Date.now() - startedAt >= SCAN_LIMIT_MS) {
+      setScan({ scanning: false, message: "Scan is taking a while, check back later", sources: [] });
+      return;
+    }
+    pollScan(token, current, startedAt, 0);
+    return;
+  }
+  finishScan(run);
+}
+
+function finishScan(run: ScanRun | null): void {
+  const failed = run === null ? 0 : run.sources.filter((source) => source.failed).length;
+  let message = "Scan finished";
+  if (run !== null && run.status === "failed") message = "Scan failed";
+  else if (failed === 1) message = "Scan finished, 1 source failed";
+  else if (failed > 1) message = `Scan finished, ${failed} sources failed`;
+  const sources = run !== null && (failed > 0 || run.status === "failed") ? run.sources : [];
+  setScan({ scanning: false, message, sources });
+  refresh();
+}
+
 async function boot(): Promise<void> {
   try {
     saved = await readSettings();
@@ -251,13 +474,18 @@ async function boot(): Promise<void> {
   if (saved === null) showSetup(null);
   else await loadSavedFeed();
 
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
+
   try {
     await listen("refresh", () => {
-      if (screen === "setup") return;
-      void loadSavedFeed();
+      refresh();
+    });
+    await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      onPopupFocus(focused);
     });
   } catch {
-    // The tray menu is only available inside the app.
+    // The tray menu and window events are only available inside the app.
   }
 }
 

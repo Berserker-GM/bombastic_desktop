@@ -1,6 +1,6 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 
-const store = new LazyStore("settings.json");
+export const store = new LazyStore("settings.json");
 
 export interface Settings {
   apiUrl: string;
