@@ -2,9 +2,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_positioner::{Position, WindowExt};
 
 /// Ignores the blur that the opening click itself causes, and treats a tray
@@ -23,6 +24,9 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
+        // Login starts the same binary, and the popup window is created hidden,
+        // so an autostarted launch is tray only.
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(PopupGuard {
             hidden_at: Mutex::new(None),
             suppress_blur: AtomicBool::new(false),
@@ -33,8 +37,17 @@ pub fn run() {
             }
 
             let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
+            let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+            let autostart = CheckMenuItem::with_id(
+                app,
+                "autostart",
+                "Start with Windows",
+                true,
+                autostart_on,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&refresh, &quit])?;
+            let menu = Menu::with_items(app, &[&refresh, &autostart, &quit])?;
             let icon = app
                 .default_window_icon()
                 .cloned()
@@ -45,12 +58,13 @@ pub fn run() {
                 .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                .on_menu_event(move |app, event| match event.id.as_ref() {
                     "refresh" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.emit("refresh", ());
                         }
                     }
+                    "autostart" => toggle_autostart(app, &autostart),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -188,6 +202,19 @@ async fn radar_send(
     let status = response.status().as_u16();
     let body = response.text().await.map_err(|_| "unreachable".to_string())?;
     Ok(FeedHttp { status, body })
+}
+
+/// The menu flips its own check mark on click, so the mark is reset from the
+/// actual registry state afterwards, whether or not the change worked.
+fn toggle_autostart(app: &tauri::AppHandle, item: &CheckMenuItem<tauri::Wry>) {
+    let manager = app.autolaunch();
+    let enabled = manager.is_enabled().unwrap_or(false);
+    let _ = if enabled {
+        manager.disable()
+    } else {
+        manager.enable()
+    };
+    let _ = item.set_checked(manager.is_enabled().unwrap_or(enabled));
 }
 
 fn toggle_popup(app: &tauri::AppHandle) {

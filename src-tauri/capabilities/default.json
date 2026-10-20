@@ -8,6 +8,7 @@
     "opener:default",
     "store:default",
     "notification:default",
+    "autostart:default",
     "allow-get-feed",
     "allow-get-event",
     "allow-post-action",

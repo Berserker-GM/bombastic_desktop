@@ -17,6 +17,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
