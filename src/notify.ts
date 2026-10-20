@@ -37,8 +37,10 @@ export function checkImportant(feed: ParsedFeed, apiUrl: string, silent: boolean
 async function runCheck(feed: ParsedFeed, apiUrl: string, silent: boolean): Promise<void> {
   const current = importantItems(feed);
   const previous = await readSeen(apiUrl);
-  const fresh = current.filter((item) => !previous.has(item.event_id));
   await writeSeen({ apiUrl, ids: current.map((item) => item.event_id) });
+  // The first check for a server only records a baseline, so what's already there doesn't notify.
+  if (previous === null) return;
+  const fresh = current.filter((item) => !previous.has(item.event_id));
   if (fresh.length === 0 || silent) return;
   if (!(await allowed())) return;
   try {
@@ -71,13 +73,14 @@ async function allowed(): Promise<boolean> {
   return permission;
 }
 
-async function readSeen(apiUrl: string): Promise<Set<number>> {
+/** Resolves to null when there is no usable record for this server yet. */
+async function readSeen(apiUrl: string): Promise<Set<number> | null> {
   try {
     const record = await store.get<SeenRecord>(SEEN_KEY);
-    if (!record || record.apiUrl !== apiUrl || !Array.isArray(record.ids)) return new Set();
+    if (!record || record.apiUrl !== apiUrl || !Array.isArray(record.ids)) return null;
     return new Set(record.ids.filter((id): id is number => typeof id === "number"));
   } catch {
-    return new Set();
+    return null;
   }
 }
 

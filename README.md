@@ -48,6 +48,21 @@ app's `settings.json` (on Windows: `%APPDATA%\com.radar.desktop\settings.json`).
 rejects the token, the popup opens the setup form again. To start over, quit the app and delete that
 file.
 
+## Checking notifications
+
+The first feed fetch for an API URL only records which items are important and unseen; it doesn't
+notify. Only items that become important after that trigger a notification. To check this by hand:
+
+1. Quit the app and delete `settings.json` (see above) so it starts fresh.
+2. Make sure the backend already has at least one important unseen item (it appears under Updates).
+3. Start the app and complete setup. **No notification should appear.**
+4. Make another item important (for example, change a tracked event's deadline and scan), then use
+   tray → **Refresh** with the popup closed. **One notification should appear, for that item only.**
+5. Refresh again, or restart the app: no new notification.
+
+Switching to a different API URL starts a new baseline, so it doesn't notify on the first fetch
+either.
+
 ## Build an installer
 
 ```bash
