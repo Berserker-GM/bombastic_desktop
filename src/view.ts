@@ -32,7 +32,7 @@ const TAB_LABEL: Record<SectionId, string> = {
   saved: "Saved",
 };
 
-type Report = (message: string | null, pending: boolean) => void;
+type Report = (message: string | null, pending: boolean, hint?: string | null) => void;
 
 export interface FeedChrome {
   added: ReadonlySet<number>;
@@ -92,9 +92,15 @@ export function renderSetup(
   error.className = "form-error";
   error.setAttribute("role", "alert");
 
-  const report: Report = (message, pending) => {
+  const status = document.createElement("p");
+  status.className = "form-hint";
+  status.setAttribute("role", "status");
+
+  const report: Report = (message, pending, hint = null) => {
     error.textContent = message ?? "";
     error.hidden = message === null || message === "";
+    status.textContent = hint ?? "";
+    status.hidden = hint === null || hint === "";
     button.disabled = pending;
     button.textContent = pending ? "Testing…" : "Test";
   };
@@ -111,6 +117,7 @@ export function renderSetup(
     labeled("API URL", urlInput),
     labeled("Token", tokenInput),
     button,
+    status,
     error,
   );
   root.replaceChildren(form);
@@ -118,8 +125,10 @@ export function renderSetup(
   else tokenInput.focus();
 }
 
-export function renderLoading(root: HTMLElement): void {
-  root.replaceChildren(el("p", "loading", "Loading…"));
+export function renderLoading(root: HTMLElement, text = "Loading…"): void {
+  const line = el("p", "loading", text);
+  line.setAttribute("role", "status");
+  root.replaceChildren(line);
 }
 
 export function renderProblem(root: HTMLElement, message: string, onRetry: () => void): void {

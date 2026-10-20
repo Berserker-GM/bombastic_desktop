@@ -82,6 +82,12 @@ button:disabled {
   font-weight: 650;
 }
 
+.form-hint {
+  margin: 0;
+  color: #8b93a3;
+  font-size: 12px;
+}
+
 .form-error {
   margin: 0;
   color: #f0a0a0;

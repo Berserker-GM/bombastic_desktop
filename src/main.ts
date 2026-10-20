@@ -37,6 +37,11 @@ const STALE_MS = 5 * 60_000;
 const SCAN_POLL_MS = 3_000;
 const SCAN_LIMIT_MS = 30 * 60_000;
 const SCAN_MISSES = 5;
+/** Render's free instance sleeps after 15 minutes without traffic; assume it has after this. */
+const IDLE_MS = 10 * 60_000;
+/** After an idle spell, a feed request still pending after this long is probably a cold start. */
+const WAKING_AFTER_MS = 2_500;
+const WAKING = "Waking the server… (the free host can take up to a minute)";
 
 type ScanState = Omit<FooterState, "note">;
 const IDLE_SCAN: ScanState = { scanning: false, message: null, sources: [] };
@@ -61,6 +66,7 @@ const details = new Map<number, EventDetail>();
 const whyLoading = new Set<number>();
 const whyErrors = new Map<number, string>();
 
+let lastContactAt = 0;
 let popupOpen = false;
 let pollTimer: number | undefined;
 let lastAttemptAt = 0;
@@ -108,7 +114,9 @@ function showSetup(message: string | null): void {
       const id = ++generation;
       void (async () => {
         try {
-          const feed = await fetchFeed(base, secret);
+          const feed = await fetchFeedWaking(base, secret, () => {
+            if (id === generation) report(null, true, WAKING);
+          });
           if (id !== generation) return;
           try {
             await writeSettings({ apiUrl: base, token: secret });
@@ -275,7 +283,9 @@ async function loadSavedFeed(): Promise<void> {
   screen = "loading";
   renderLoading(app);
   try {
-    const feed = await fetchFeed(current.apiUrl, current.token);
+    const feed = await fetchFeedWaking(current.apiUrl, current.token, () => {
+      if (id === generation && screen === "loading") renderLoading(app, WAKING);
+    });
     if (id !== generation) return;
     showFeed(feed);
     recordFetch(feed, current.apiUrl);
@@ -294,6 +304,34 @@ async function loadSavedFeed(): Promise<void> {
   }
 }
 
+/**
+ * Fetches the feed, allowing for a sleeping free-tier host. After an idle spell it
+ * calls `onWaking` if the request is slow, and retries once if the server can't be reached.
+ */
+async function fetchFeedWaking(apiUrl: string, token: string, onWaking: () => void): Promise<ParsedFeed> {
+  const idle = Date.now() - lastContactAt > IDLE_MS;
+  const slow = idle ? window.setTimeout(onWaking, WAKING_AFTER_MS) : undefined;
+  try {
+    try {
+      return reached(await fetchFeed(apiUrl, token));
+    } catch (error) {
+      const problem = error instanceof FeedError ? error.problem : "unreachable";
+      if (problem !== "unreachable") lastContactAt = Date.now();
+      if (!idle || problem !== "unreachable") throw error;
+    }
+    window.clearTimeout(slow);
+    onWaking();
+    return reached(await fetchFeed(apiUrl, token));
+  } finally {
+    window.clearTimeout(slow);
+  }
+}
+
+function reached(next: ParsedFeed): ParsedFeed {
+  lastContactAt = Date.now();
+  return next;
+}
+
 /** Refetches without blanking the feed. Overlapping calls collapse into one rerun. */
 async function quietRefresh(): Promise<void> {
   if (saved === null) return;
@@ -305,7 +343,11 @@ async function quietRefresh(): Promise<void> {
   const epoch = generation;
   const current = saved;
   try {
-    const next = await fetchFeed(current.apiUrl, current.token);
+    const next = await fetchFeedWaking(current.apiUrl, current.token, () => {
+      if (epoch !== generation) return;
+      refreshNote = WAKING;
+      rerender();
+    });
     if (epoch !== generation) return;
     recordFetch(next, current.apiUrl);
     if (screen === "feed") showFeed(next);

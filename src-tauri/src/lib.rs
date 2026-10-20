@@ -16,6 +16,9 @@ struct PopupGuard {
 }
 
 const BLUR_GRACE: Duration = Duration::from_millis(150);
+/// The free Render instance takes 30-60s to cold start, and /feed is what wakes it.
+const FEED_TIMEOUT: Duration = Duration::from_secs(60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -126,7 +129,7 @@ struct FeedHttp {
 
 #[tauri::command]
 async fn get_feed(api_url: String, token: String) -> Result<FeedHttp, String> {
-    radar_send(&api_url, &token, reqwest::Method::GET, "/feed", None).await
+    radar_send(&api_url, &token, reqwest::Method::GET, "/feed", None, FEED_TIMEOUT).await
 }
 
 #[tauri::command]
@@ -140,6 +143,7 @@ async fn get_event(api_url: String, token: String, event_id: i64) -> Result<Feed
         reqwest::Method::GET,
         &format!("/events/{event_id}"),
         None,
+        REQUEST_TIMEOUT,
     )
     .await
 }
@@ -160,18 +164,35 @@ async fn post_action(
         reqwest::Method::POST,
         &format!("/events/{event_id}/action"),
         Some(serde_json::json!({ "action": action })),
+        REQUEST_TIMEOUT,
     )
     .await
 }
 
 #[tauri::command]
 async fn scan_now(api_url: String, token: String) -> Result<FeedHttp, String> {
-    radar_send(&api_url, &token, reqwest::Method::POST, "/scan/now", None).await
+    radar_send(
+        &api_url,
+        &token,
+        reqwest::Method::POST,
+        "/scan/now",
+        None,
+        REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 #[tauri::command]
 async fn scan_status(api_url: String, token: String) -> Result<FeedHttp, String> {
-    radar_send(&api_url, &token, reqwest::Method::GET, "/scan/status", None).await
+    radar_send(
+        &api_url,
+        &token,
+        reqwest::Method::GET,
+        "/scan/status",
+        None,
+        REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 async fn radar_send(
@@ -180,6 +201,7 @@ async fn radar_send(
     method: reqwest::Method,
     path: &str,
     json: Option<serde_json::Value>,
+    timeout: Duration,
 ) -> Result<FeedHttp, String> {
     let base = api_url.trim().trim_end_matches('/');
     let secret = token.trim();
@@ -192,7 +214,7 @@ async fn radar_send(
     }
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(timeout)
         .build()
         .map_err(|_| "unreachable".to_string())?;
     let mut request = client
